@@ -1,0 +1,13 @@
+#ifndef PARAMS_H
+#define PARAMS_H
+
+#define NTRU_LPRIME_P 761
+#define NTRU_LPRIME_Q 4591
+#define NTRU_LPRIME_W 250
+#define NTRU_LPRIME_DELTA 292
+#define NTRU_LPRIME_TAU_0 2156
+#define NTRU_LPRIME_TAU_1 114
+#define NTRU_LPRIME_TAU_2 2007
+#define NTRU_LPRIME_TAU_3 287
+
+#endif
