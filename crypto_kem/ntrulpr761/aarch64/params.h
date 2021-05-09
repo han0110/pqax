@@ -1,6 +1,7 @@
 #ifndef PARAMS_H
 #define PARAMS_H
 
+// main
 #define NTRU_LPRIME_P 761
 #define NTRU_LPRIME_Q 4591
 #define NTRU_LPRIME_W 250
@@ -9,5 +10,11 @@
 #define NTRU_LPRIME_TAU_1 114
 #define NTRU_LPRIME_TAU_2 2007
 #define NTRU_LPRIME_TAU_3 287
+
+// auxiliary
+#define NTRU_LPRIME_Q_HALF_FLOOR (NTRU_LPRIME_Q - 1) / 2
+#define NTRU_LPRIME_SEED_BYTES 32
+#define NTRU_LPRIME_SECRET_KEY_BYTES (NTRU_LPRIME_P + 3) / 4
+#define NTRU_LPRIME_ROUND_ENCODED_BYTES 1007
 
 #endif

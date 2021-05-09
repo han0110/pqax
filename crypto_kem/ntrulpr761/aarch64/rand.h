@@ -1,6 +1,7 @@
 #ifndef RAND_H
 #define RAND_H
 
+#include "kem.h"
 #include "params.h"
 #include "randombytes.h"
 #include "sort.h"
@@ -16,20 +17,19 @@ static uint32_t random_u32() {
 
 void random_u8_xn(uint8_t *dst, size_t n) { randombytes(dst, n); }
 
+void random_input(int8_t *dst) {
+    uint8_t s[CRYPTO_BYTES];
+
+    randombytes(s, CRYPTO_BYTES);
+    encode_input(dst, s);
+}
+
 // TODO: optmize with neon
-void random_small_xp(small *dst) {
+void random_short(small *dst) {
     uint32_t L[NTRU_LPRIME_P];
-    int i;
 
-    for (i = 0; i < NTRU_LPRIME_P; i++) L[i] = random_u32();
-    for (i = 0; i < NTRU_LPRIME_W; i++)
-        L[i] = L[i] & (uint32_t)-2;  // non-zero part (1 or -1)
-    for (; i < NTRU_LPRIME_P; i++)
-        L[i] = (L[i] & (uint32_t)-3) | 1;  // zero part
-
-    sort_xp(L);
-
-    for (i = 0; i < NTRU_LPRIME_P; i++) dst[i] = (small)(L[i] & 3) - 1;
+    for (int i = 0; i < NTRU_LPRIME_P; ++i) L[i] = random_u32();
+    sort_to_short(dst, L);
 }
 
 #endif
