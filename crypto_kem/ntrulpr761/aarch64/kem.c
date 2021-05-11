@@ -39,7 +39,7 @@ static void generator(Fq *G, const uint8_t *S) {
 
     expand(L, S);
     for (int i = 0; i < NTRU_LPRIME_P; ++i)
-        G[i] = barrett_reduce_q(L[i] - NTRU_LPRIME_Q_HALF_FLOOR);
+        G[i] = barrett_q(L[i] - NTRU_LPRIME_Q_HALF_FLOOR);
 }
 
 static int8_t top(Fq C) {
@@ -47,7 +47,7 @@ static int8_t top(Fq C) {
 }
 
 static Fq right(int8_t T) {
-    return barrett_reduce_q(NTRU_LPRIME_TAU_3 * (int32_t)T - NTRU_LPRIME_TAU_2);
+    return barrett_q(NTRU_LPRIME_TAU_3 * (int32_t)T - NTRU_LPRIME_TAU_2);
 }
 
 static void hash_prefix(unsigned char *dst, int prefix,
@@ -61,7 +61,7 @@ static void hash_prefix(unsigned char *dst, int prefix,
 }
 
 static void hash_short(small *dst, const int8_t *r) {
-    unsigned char s[8 * CRYPTO_BYTES];
+    unsigned char s[NTRU_LPRIME_INPUT_BYTES];
     unsigned char h[HASH_BYTES];
     uint32_t L[NTRU_LPRIME_P];
 
@@ -75,12 +75,13 @@ static void hash_confirm(unsigned char *h, const unsigned char *r,
                          const unsigned char *pk,
                          const unsigned char *pk_hash) {
     int i;
-    unsigned char x[CRYPTO_BYTES + HASH_BYTES];
+    unsigned char x[NTRU_LPRIME_INPUT_BYTES + HASH_BYTES];
 
-    for (i = 0; i < CRYPTO_BYTES; ++i) x[i] = r[i];
-    for (i = 0; i < HASH_BYTES; ++i) x[CRYPTO_BYTES + i] = pk_hash[i];
+    for (i = 0; i < NTRU_LPRIME_INPUT_BYTES; ++i) x[i] = r[i];
+    for (i = 0; i < HASH_BYTES; ++i)
+        x[NTRU_LPRIME_INPUT_BYTES + i] = pk_hash[i];
 
-    hash_prefix(h, 2, x, CRYPTO_BYTES + HASH_BYTES);
+    hash_prefix(h, 2, x, sizeof x);
 }
 
 static void key_gen_a(Fq *A, small *a, const Fq *G) {
@@ -109,8 +110,25 @@ static void encrypt(Fq *B, int8_t *T, const int8_t *r, const unsigned char *S,
     mul_small(bG, G, b);
     round3_xp(B, bG);
     mul_small(bA, A, b);
-    for (int i = 0; i < 8 * CRYPTO_BYTES; ++i)
-        T[i] = top(barrett_reduce_q(bA[i] + r[i] * NTRU_LPRIME_Q_HALF_FLOOR));
+    for (int i = 0; i < 8 * NTRU_LPRIME_INPUT_BYTES; ++i)
+        T[i] = top(barrett_q(bA[i] + r[i] * NTRU_LPRIME_Q_HALF_FLOOR));
+}
+
+#define neg_mask(x) -(int)(x >> 15)
+
+static void decrypt(int8_t *r, const unsigned char *ct, unsigned char *sk) {
+    small a[NTRU_LPRIME_P];
+    Fq B[NTRU_LPRIME_P], aB[NTRU_LPRIME_P];
+    int8_t T[8 * NTRU_LPRIME_INPUT_BYTES];
+
+    decode_small(a, sk);
+    decode_round(B, ct);
+    ct += NTRU_LPRIME_ROUND_ENCODED_BYTES;
+    decode_top(T, ct);
+
+    mul_small(aB, B, a);
+    for (int i = 0; i < 8 * NTRU_LPRIME_INPUT_BYTES; ++i)
+        r[i] = neg_mask(barrett_q(right(T[i]) - aB[i] + 4 * NTRU_LPRIME_W + 1));
 }
 
 static void hide(uint8_t *ct, unsigned char *r_encoded, const int8_t *r,
@@ -121,10 +139,13 @@ static void hide(uint8_t *ct, unsigned char *r_encoded, const int8_t *r,
 
     encode_input(r_encoded, r);
 
-    decode_round(A, pk += NTRU_LPRIME_SEED_BYTES);
+    decode_round(A, pk);
+    pk += NTRU_LPRIME_SEED_BYTES;
     encrypt(B, T, r, pk, A);
-    encode_round(ct += NTRU_LPRIME_ROUND_ENCODED_BYTES, B);
-    encode_top(ct += (CRYPTO_CIPHERTEXTBYTES - HASH_BYTES), T);
+    encode_round(ct, B);
+    ct += NTRU_LPRIME_ROUND_ENCODED_BYTES;
+    encode_top(ct, T);
+    ct += 4 * NTRU_LPRIME_INPUT_BYTES;
 
     hash_confirm(ct, r_encoded, pk, pk_hash);
 }
@@ -132,8 +153,8 @@ static void hide(uint8_t *ct, unsigned char *r_encoded, const int8_t *r,
 static void hash_session(unsigned char *ss, int b,
                          const unsigned char *r_encoded,
                          const unsigned char *ct) {
-    unsigned char x[CRYPTO_CIPHERTEXTBYTES + CRYPTO_BYTES];
     int i;
+    unsigned char x[CRYPTO_CIPHERTEXTBYTES + CRYPTO_BYTES];
 
     for (i = 0; i < CRYPTO_BYTES; ++i) x[i] = r_encoded[i];
     for (i = CRYPTO_BYTES; i < CRYPTO_CIPHERTEXTBYTES + CRYPTO_BYTES; ++i)
@@ -141,24 +162,35 @@ static void hash_session(unsigned char *ss, int b,
     hash_prefix(ss, b, x, CRYPTO_CIPHERTEXTBYTES + CRYPTO_BYTES);
 }
 
+static int ciphertext_diff_mask(const unsigned char *ct,
+                                const unsigned char *ct_ref) {
+    int len = CRYPTO_CIPHERTEXTBYTES;
+    uint16_t mask = 0;
+
+    while (len-- > 0) mask |= (*ct++) ^ (*ct_ref++);
+    return (1 & ((mask - 1) >> 8)) - 1;
+}
+
 int crypto_kem_keypair(uint8_t *pk, uint8_t *sk) {
     Fq A[NTRU_LPRIME_P];
     small a[NTRU_LPRIME_P];
 
-    key_gen_s(pk += NTRU_LPRIME_SEED_BYTES, A, a);
-    encode_round(pk, A);
-    encode_small(sk += NTRU_LPRIME_SECRET_KEY_BYTES, a);
+    key_gen_s(pk, A, a);
+    encode_round(pk + NTRU_LPRIME_SEED_BYTES, A);
+    encode_small(sk, a);
+    sk += NTRU_LPRIME_SECRET_KEY_BYTES;
 
     for (int i = 0; i < CRYPTO_PUBLICKEYBYTES; ++i) *sk++ = pk[i];
-    random_u8_xn(sk += CRYPTO_BYTES, CRYPTO_BYTES);
+    random_u8_xn(sk, CRYPTO_BYTES);
+    sk += CRYPTO_BYTES;
     hash_prefix(sk, 4, pk, CRYPTO_PUBLICKEYBYTES);
 
     return 0;
 }
 
 int crypto_kem_enc(uint8_t *ct, uint8_t *ss, const uint8_t *pk) {
-    int8_t r[8 * CRYPTO_BYTES];
-    unsigned char r_encoded[CRYPTO_BYTES];
+    int8_t r[8 * NTRU_LPRIME_INPUT_BYTES];
+    unsigned char r_encoded[NTRU_LPRIME_INPUT_BYTES];
     unsigned char pk_hash[HASH_BYTES];
 
     hash_prefix(pk_hash, 4, pk, CRYPTO_PUBLICKEYBYTES);
@@ -170,6 +202,20 @@ int crypto_kem_enc(uint8_t *ct, uint8_t *ss, const uint8_t *pk) {
 }
 
 int crypto_kem_dec(uint8_t *ss, const uint8_t *ct, const uint8_t *sk) {
-    // TODO:
+    const unsigned char *pk = sk + NTRU_LPRIME_SECRET_KEY_BYTES;
+    const unsigned char *rho = pk + CRYPTO_PUBLICKEYBYTES;
+    const unsigned char *pk_hash = rho + NTRU_LPRIME_INPUT_BYTES;
+
+    int8_t r[8 * NTRU_LPRIME_INPUT_BYTES];
+    unsigned char r_encoded[NTRU_LPRIME_INPUT_BYTES];
+    unsigned char ct_ref[CRYPTO_CIPHERTEXTBYTES];
+
+    decrypt(r, ct, sk);
+    hide(ct_ref, r_encoded, r, pk, pk_hash);
+    int mask = ciphertext_diff_mask(ct, ct_ref);
+    for (int i = 0; i < NTRU_LPRIME_INPUT_BYTES; ++i)
+        r_encoded[i] ^= mask & (r_encoded[i] & rho[i]);
+    hash_session(ss, 1 + mask, r_encoded, ct);
+
     return 0;
 }

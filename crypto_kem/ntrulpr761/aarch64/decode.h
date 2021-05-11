@@ -5,6 +5,7 @@
 
 #include "kem.h"
 #include "params.h"
+#include "type.h"
 
 #define udivmod_x(N)                                                  \
     static void udivmod_##N(uint32_t *q, uint16_t *r, uint32_t src) { \
@@ -105,9 +106,33 @@ void decode_round(int16_t *dst, const unsigned char *src) {
         dst[i] = dst[i] * 3 - NTRU_LPRIME_Q_HALF_FLOOR;
 }
 
+void decode_small(small *dst, const unsigned char *src) {
+    unsigned char x;
+
+    for (int i = 0; i < NTRU_LPRIME_P / 4; ++i) {
+        x = *src++;
+        *dst++ = (small)(x & 3) - 1;
+        x >>= 2;
+        *dst++ = (small)(x & 3) - 1;
+        x >>= 2;
+        *dst++ = (small)(x & 3) - 1;
+        x >>= 2;
+        *dst++ = (small)(x & 3) - 1;
+    }
+    x = *src++;
+    *dst++ = (small)(x & 3) - 1;
+}
+
 void decode_input(uint8_t *dst, const unsigned char *src) {
-    for (int i = 0; i < 8 * CRYPTO_BYTES; ++i)
+    for (int i = 0; i < 8 * NTRU_LPRIME_INPUT_BYTES; ++i)
         dst[i] = 1 & (src[i >> 3] >> (i & 7));
+}
+
+void decode_top(int8_t *T, const unsigned char *src) {
+    for (int i = 0; i < 4 * NTRU_LPRIME_INPUT_BYTES; ++i) {
+        T[2 * i] = src[i] & 15;
+        T[2 * i + 1] = src[i] >> 4;
+    }
 }
 
 #endif

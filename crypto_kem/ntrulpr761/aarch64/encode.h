@@ -103,12 +103,14 @@ void encode_small(uint8_t* dst, small* src) {
 void encode_input(unsigned char* dst, const uint8_t* r) {
     int i;
 
-    for (i = 0; i < CRYPTO_BYTES; ++i) dst[i] = 0;
-    for (i = 0; i < 8 * CRYPTO_BYTES; ++i) dst[i >> 3] |= r[i] << (i & 7);
+    for (i = 0; i < NTRU_LPRIME_INPUT_BYTES; ++i) dst[i] = 0;
+    for (i = 0; i < 8 * NTRU_LPRIME_INPUT_BYTES; ++i)
+        dst[i >> 3] |= r[i] << (i & 7);
 }
 
-void encode_top(unsigned char* s, const int8_t* T) {
-    for (int i = 0; i < 128; ++i) s[i] = T[2 * i] + (T[2 * i + 1] << 4);
+void encode_top(unsigned char* dst, const int8_t* T) {
+    for (int i = 0; i < 4 * NTRU_LPRIME_INPUT_BYTES; ++i)
+        dst[i] = T[2 * i] + (T[2 * i + 1] << 4);
 }
 
 #endif
