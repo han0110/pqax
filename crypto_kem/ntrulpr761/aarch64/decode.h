@@ -123,11 +123,6 @@ void decode_small(small *dst, const unsigned char *src) {
     *dst++ = (small)(x & 3) - 1;
 }
 
-void decode_input(uint8_t *dst, const unsigned char *src) {
-    for (int i = 0; i < 8 * NTRU_LPRIME_INPUT_BYTES; ++i)
-        dst[i] = 1 & (src[i >> 3] >> (i & 7));
-}
-
 void decode_top(int8_t *T, const unsigned char *src) {
     for (int i = 0; i < 4 * NTRU_LPRIME_INPUT_BYTES; ++i) {
         T[2 * i] = src[i] & 15;

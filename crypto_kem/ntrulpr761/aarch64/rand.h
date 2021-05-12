@@ -21,7 +21,8 @@ void random_input(int8_t *dst) {
     uint8_t s[CRYPTO_BYTES];
 
     randombytes(s, CRYPTO_BYTES);
-    encode_input(dst, s);
+    for (int i = 0; i < 8 * NTRU_LPRIME_INPUT_BYTES; ++i)
+        dst[i] = 1 & (s[i >> 3] >> (i & 7));
 }
 
 // TODO: optmize with neon

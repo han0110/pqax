@@ -15,22 +15,21 @@ void mul_small_schoolbook(Fq *h, const Fq *f, const small *g) {
     for (i = 0; i < NTRU_LPRIME_P; ++i) {
         result = 0;
         for (j = 0; j <= i; ++j) {
-            result = unsigned_barrett_q(result + f[j] * (int32_t)g[i - j]);
+            result = barrett_q(result + f[j] * (int32_t)g[i - j]);
         }
         fg[i] = result;
     }
     for (i = NTRU_LPRIME_P; i < 2 * NTRU_LPRIME_P - 1; ++i) {
         result = 0;
         for (j = i - NTRU_LPRIME_P + 1; j < NTRU_LPRIME_P; ++j)
-            result = unsigned_barrett_q(result + f[j] * (int32_t)g[i - j]);
+            result = barrett_q(result + f[j] * (int32_t)g[i - j]);
         fg[i] = result;
     }
 
     for (i = 2 * NTRU_LPRIME_P - 2; i >= NTRU_LPRIME_P; --i) {
-        fg[i - NTRU_LPRIME_P] =
-            unsigned_barrett_q(fg[i - NTRU_LPRIME_P] + fg[i]);
+        fg[i - NTRU_LPRIME_P] = barrett_q(fg[i - NTRU_LPRIME_P] + fg[i]);
         fg[i - NTRU_LPRIME_P + 1] =
-            unsigned_barrett_q(fg[i - NTRU_LPRIME_P + 1] + fg[i]);
+            barrett_q(fg[i - NTRU_LPRIME_P + 1] + fg[i]);
     }
 
     for (i = 0; i < NTRU_LPRIME_P; ++i) h[i] = fg[i];

@@ -39,7 +39,7 @@ static void generator(Fq *G, const uint8_t *S) {
 
     expand(L, S);
     for (int i = 0; i < NTRU_LPRIME_P; ++i)
-        G[i] = barrett_q(L[i] - NTRU_LPRIME_Q_HALF_FLOOR);
+        G[i] = unsigned_barrett_q(L[i] - NTRU_LPRIME_Q_HALF_FLOOR);
 }
 
 static int8_t top(Fq C) {
@@ -47,7 +47,8 @@ static int8_t top(Fq C) {
 }
 
 static Fq right(int8_t T) {
-    return barrett_q(NTRU_LPRIME_TAU_3 * (int32_t)T - NTRU_LPRIME_TAU_2);
+    return unsigned_barrett_q(NTRU_LPRIME_TAU_3 * (int32_t)T -
+                              NTRU_LPRIME_TAU_2);
 }
 
 static void hash_prefix(unsigned char *dst, int prefix,
@@ -128,7 +129,8 @@ static void decrypt(int8_t *r, const unsigned char *ct, unsigned char *sk) {
 
     mul_small(aB, B, a);
     for (int i = 0; i < 8 * NTRU_LPRIME_INPUT_BYTES; ++i)
-        r[i] = neg_mask(barrett_q(right(T[i]) - aB[i] + 4 * NTRU_LPRIME_W + 1));
+        r[i] = neg_mask(
+            unsigned_barrett_q(right(T[i]) - aB[i] + 4 * NTRU_LPRIME_W + 1));
 }
 
 static void hide(uint8_t *ct, unsigned char *r_encoded, const int8_t *r,
@@ -139,8 +141,7 @@ static void hide(uint8_t *ct, unsigned char *r_encoded, const int8_t *r,
 
     encode_input(r_encoded, r);
 
-    decode_round(A, pk);
-    pk += NTRU_LPRIME_SEED_BYTES;
+    decode_round(A, pk + NTRU_LPRIME_SEED_BYTES);
     encrypt(B, T, r, pk, A);
     encode_round(ct, B);
     ct += NTRU_LPRIME_ROUND_ENCODED_BYTES;
@@ -154,12 +155,12 @@ static void hash_session(unsigned char *ss, int b,
                          const unsigned char *r_encoded,
                          const unsigned char *ct) {
     int i;
-    unsigned char x[CRYPTO_CIPHERTEXTBYTES + CRYPTO_BYTES];
+    unsigned char x[NTRU_LPRIME_INPUT_BYTES + CRYPTO_CIPHERTEXTBYTES];
 
-    for (i = 0; i < CRYPTO_BYTES; ++i) x[i] = r_encoded[i];
-    for (i = CRYPTO_BYTES; i < CRYPTO_CIPHERTEXTBYTES + CRYPTO_BYTES; ++i)
-        x[i] = ct[i];
-    hash_prefix(ss, b, x, CRYPTO_CIPHERTEXTBYTES + CRYPTO_BYTES);
+    for (i = 0; i < NTRU_LPRIME_INPUT_BYTES; ++i) x[i] = r_encoded[i];
+    unsigned char *xx = x + NTRU_LPRIME_INPUT_BYTES;
+    for (i = 0; i < CRYPTO_CIPHERTEXTBYTES; ++i) xx[i] = ct[i];
+    hash_prefix(ss, b, x, NTRU_LPRIME_INPUT_BYTES + CRYPTO_CIPHERTEXTBYTES);
 }
 
 static int ciphertext_diff_mask(const unsigned char *ct,
