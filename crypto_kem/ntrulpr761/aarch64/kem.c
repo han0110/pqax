@@ -47,8 +47,7 @@ static int8_t top(Fq C) {
 }
 
 static Fq right(int8_t T) {
-    return unsigned_barrett_q(NTRU_LPRIME_TAU_3 * (int32_t)T -
-                              NTRU_LPRIME_TAU_2);
+    return barrett_q(NTRU_LPRIME_TAU_3 * (int32_t)T - NTRU_LPRIME_TAU_2);
 }
 
 static void hash_prefix(unsigned char *dst, int prefix,
@@ -129,8 +128,7 @@ static void decrypt(int8_t *r, const unsigned char *ct, unsigned char *sk) {
 
     mul_small(aB, B, a);
     for (int i = 0; i < 8 * NTRU_LPRIME_INPUT_BYTES; ++i)
-        r[i] = neg_mask(
-            unsigned_barrett_q(right(T[i]) - aB[i] + 4 * NTRU_LPRIME_W + 1));
+        r[i] = neg_mask(barrett_q(right(T[i]) - aB[i] + 4 * NTRU_LPRIME_W + 1));
 }
 
 static void hide(uint8_t *ct, unsigned char *r_encoded, const int8_t *r,

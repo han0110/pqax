@@ -5,38 +5,31 @@
 
 #include "params.h"
 
-#define THREE 3
-#define BAR_3_K 17
-
 static int16_t round3(int16_t src) {
-    const int32_t r = (int32_t)1 << (BAR_3_K - 1);
-    const int32_t m = (r * 2 + THREE / 2) / THREE;
+    const int k = 15;
+    const int16_t r = (int16_t)1 << (k - 1);
+    const int16_t m = (r * 2 + 1) / 3;
 
-    // 3 * (⌈in * m⌋ >> 17)
-    int32_t quotient = (src * m + r) >> BAR_3_K;
-    return quotient * THREE;
+    return 3 * ((src * m + r) >> k);
 }
 
-static void round3_x4(int16_t* dst, const int16_t* src) {
-    const int32_t r = (int32_t)1 << (BAR_3_K - 1);
-    const int32_t m = (r * 2 + THREE / 2) / THREE;
-    const int32x4_t mx4 = {m, m, m, m};
+static void round3_x8(int16_t* dst, const int16_t* src) {
+    const int k = 15;
+    const int16_t r = (int16_t)1 << (k - 1);
+    const int16_t m = (r * 2 + 1) / 3;
 
-    int16x4_t in16x4 = vld1_s16(src);
-    int32x4_t in32x4 = vmovl_s16(in16x4);
+    int16x8_t mx8 = vdupq_n_s16(m);
+    int16x8_t x8 = vld1q_s16(src);
 
-    // 3 * (⌈in * m⌋ >> 17)
-    int32x4_t tmp = vmulq_s32(in32x4, mx4);
-    tmp = vrshrq_n_s32(tmp, BAR_3_K);
-    tmp = vmulq_n_s32(tmp, THREE);
+    x8 = vqrdmulhq_s16(x8, mx8);
+    x8 = vmulq_n_s16(x8, 3);
 
-    int16x4_t out16x4 = vmovn_s32(tmp);
-    vst1_s16(dst, out16x4);
+    vst1q_s16(dst, x8);
 }
 
 void round3_xp(int16_t* dst, const int16_t* src) {
-    for (int i = 0; i < NTRU_LPRIME_P / 4 * 4; i += 4) {
-        round3_x4(dst + i, src + i);
+    for (int i = 0; i < NTRU_LPRIME_P / 8 * 8; i += 8) {
+        round3_x8(dst + i, src + i);
     }
     dst[NTRU_LPRIME_P - 1] = round3(src[NTRU_LPRIME_P - 1]);
 }

@@ -8,22 +8,25 @@
 #include "type.h"
 
 void mul_small_schoolbook(Fq *h, const Fq *f, const small *g) {
+    Fq f_reduced[NTRU_LPRIME_P];
     Fq fg[2 * NTRU_LPRIME_P - 1];
-    Fq result;
+    int32_t result;
     int i, j;
 
     for (i = 0; i < NTRU_LPRIME_P; ++i) {
+        f_reduced[i] = barrett_q(f[i]);
+    }
+    for (i = 0; i < NTRU_LPRIME_P; ++i) {
         result = 0;
-        for (j = 0; j <= i; ++j) {
-            result = barrett_q(result + f[j] * (int32_t)g[i - j]);
-        }
-        fg[i] = result;
+        for (j = 0; j <= i; ++j)
+            result = result + f_reduced[j] * (int32_t)g[i - j];
+        fg[i] = barrett_q(result);
     }
     for (i = NTRU_LPRIME_P; i < 2 * NTRU_LPRIME_P - 1; ++i) {
         result = 0;
         for (j = i - NTRU_LPRIME_P + 1; j < NTRU_LPRIME_P; ++j)
-            result = barrett_q(result + f[j] * (int32_t)g[i - j]);
-        fg[i] = result;
+            result = result + f_reduced[j] * (int32_t)g[i - j];
+        fg[i] = barrett_q(result);
     }
 
     for (i = 2 * NTRU_LPRIME_P - 2; i >= NTRU_LPRIME_P; --i) {
