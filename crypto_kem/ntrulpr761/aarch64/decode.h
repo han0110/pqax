@@ -7,23 +7,24 @@
 #include "params.h"
 #include "type.h"
 
-#define udivmod_x(N)                                                  \
-    static void udivmod_##N(uint32_t *q, uint16_t *r, uint32_t src) { \
-        const uint64_t M = ((uint32_t)1 << 31) / N;                   \
-        uint32_t q2;                                                  \
-        uint32_t mask;                                                \
-                                                                      \
-        *q = ((uint64_t)src * M) >> 31;                               \
-        src -= *q * N;                                                \
-        q2 = ((uint64_t)src * M) >> 31;                               \
-        src -= q2 * N;                                                \
-        *q += q2;                                                     \
-        src -= N;                                                     \
-        *q += 1;                                                      \
-        mask = -(src >> 31);                                          \
-        src += mask & N;                                              \
-        *q += mask;                                                   \
-        *r = src;                                                     \
+#define udivmod_x(N)                                                 \
+    static void udivmod_##N(uint32_t *q, int16_t *r, uint32_t src) { \
+        const int k = 31;                                            \
+        const uint64_t m = ((uint32_t)1 << k) / N;                   \
+        uint32_t q2;                                                 \
+        uint32_t mask;                                               \
+                                                                     \
+        *q = ((uint64_t)src * m) >> k;                               \
+        src -= *q * N;                                               \
+        q2 = ((uint64_t)src * m) >> k;                               \
+        src -= q2 * N;                                               \
+        *q += q2;                                                    \
+        src -= N;                                                    \
+        *q += 1;                                                     \
+        mask = -(src >> k);                                          \
+        src += mask & N;                                             \
+        *q += mask;                                                  \
+        *r = src;                                                    \
     }
 
 udivmod_x(150);
