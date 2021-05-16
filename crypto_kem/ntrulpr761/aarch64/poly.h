@@ -8,15 +8,24 @@
 #include "type.h"
 
 #define GOODS_N 512
-#define GOODS_Q 6984193
+#define GOODS_N_HALF 256
 #define GOODS_P 1536
-// -1/6984193 mod 2^32
-#define GOODS_MONT_M_PRIME 2368115199
+// 4547 * 1536 + 1
+#define GOODS_Q 6984193
 #define GOODS_MONT_R_POW 32
+// pow(-6984193, -1, 1 << 32)
+#define GOODS_MONT_M_PRIME 2368115199
+// ((1 << 32) % 6984193) - 6984193
 #define GOODS_MONT_R_MOD_Q -311399
+// (pow(512, -1, 6984193) * 1 << 64) % 6984193
 #define GOODS_MONT_R_SQUARE_INV_N_MOD_Q 2770689
 
-int32_t goods_omegas[GOODS_N / 2] = {
+// NOTE: python3 script to generate goods_omegas
+// q, r, g  = 6984193, -311399, 3991943
+// bit_rev = lambda i: int('{:08b}'.format(i)[::-1], 2)
+// mod_q = lambda i: i % q if i % q < q / 2 else i % q - q
+// goods_omegas = [mod_q(pow(g, bit_rev(i)) * r) for i in range(256)]
+int32_t goods_omegas[GOODS_N_HALF] = {
     -311399,  3471433,  2894487,  -2592208, 2462969,  -1536046, -3050359,
     3290424,  -3196524, -2794208, 16826,    1356310,  -3421612, -922778,
     -1259013, -2252520, 804399,   -2052193, 3095387,  2009488,  -1238959,
@@ -54,7 +63,13 @@ int32_t goods_omegas[GOODS_N / 2] = {
     -611880,  -3427476, -2435318, -1538998, -1225208, 3080817,  2570693,
     1333711,  -767312,  -2815827, -818724,  3045125,  1913461,  2257460,
     2566940,  1960976,  -714395,  -1750587};
-int32_t goods_inv_omegas[GOODS_N / 2] = {
+
+// NOTE: python3 script to generate goods_inv_omegas
+// q, r, g_inv  = 6984193, -311399, -1539202
+// bit_rev = lambda i: int('{:08b}'.format(i)[::-1], 2)
+// mod_q = lambda i: i % q if i % q < q / 2 else i % q - q
+// goods_inv_omegas = [mod_q(pow(g_inv, bit_rev(i)) * r) for i in range(256)]
+int32_t goods_inv_omegas[GOODS_N_HALF] = {
     -311399,  -3471433, 2592208,  -2894487, -3290424, 3050359,  1536046,
     -2462969, 2252520,  1259013,  922778,   3421612,  -1356310, -16826,
     2794208,  3196524,  3307920,  1280757,  2977751,  -2867644, -2340431,
@@ -147,8 +162,8 @@ int32_t mont_mul_sum_x3(int32_t x1, int32_t y1, int32_t x2, int32_t y2,
 
 // TODO: optimize bufferfly and mont_mul with neon
 void ntt_512_x3(int32_t x[3][GOODS_N]) {
-    for (int size = GOODS_N / 2; size > 0; size >>= 1) {
-        int chunks = GOODS_N / 2 / size;
+    for (int size = GOODS_N_HALF; size > 0; size >>= 1) {
+        int chunks = GOODS_N_HALF / size;
 
         for (int offset = 0; offset < chunks; ++offset) {
             int begin = 2 * size * offset;
@@ -175,7 +190,7 @@ void ntt_512_x3(int32_t x[3][GOODS_N]) {
 // TODO: optimize bufferfly and mont_mul with neon
 void intt_512_x3(int32_t x[3][GOODS_N]) {
     for (int size = 1; size < GOODS_N; size <<= 1) {
-        int chunks = GOODS_N / 2 / size;
+        int chunks = GOODS_N_HALF / size;
 
         for (int offset = 0; offset < chunks; ++offset) {
             int begin = 2 * size * offset;
