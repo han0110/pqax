@@ -1,9 +1,11 @@
 #ifndef POLY_GOODS_H
 #define POLY_GOODS_H
 
+#include <arm_neon.h>
 #include <stdint.h>
 
 #include "params.h"
+#include "poly_goods_macro.h"
 #include "reduce.h"
 #include "type.h"
 
@@ -12,9 +14,12 @@
 #define GOODS_P 1536
 // 4547 * 1536 + 1
 #define GOODS_Q 6984193
+#define GOODS_Q_HALF 3492096
 #define GOODS_MONT_R_POW 32
 // pow(-6984193, -1, 1 << 32)
-#define GOODS_MONT_M_PRIME 2368115199
+#define GOODS_MONT_MM_PRIME 2368115199
+// pow(6984193, -1, 1 << 32)
+#define GOODS_MONT_PM_PRIME 1926852097
 // ((1 << 32) % 6984193) - 6984193
 #define GOODS_MONT_R_MOD_Q -311399
 // (pow(512, -1, 6984193) * 1 << 64) % 6984193
@@ -108,51 +113,174 @@ int32_t goods_inv_omegas[GOODS_N_HALF] = {
     -1448837, -2874489, -2499044, 689654,   2572353,  912063,   757948,
     -1389288, 828380,   702754,   -1517041};
 
+// idea from ~/crypto_kem/kyber768/aarch64/neon_ntt.c#L128
+#define mont_mul_neon_n(z, x, y, t)                                         \
+    do {                                                                    \
+        t.val[0] = (int32x4_t)vmull_n_s32(vget_low_s32(x), y);              \
+        t.val[1] = (int32x4_t)vmull_high_n_s32(x, y);                       \
+        t.val[2] = vuzp1q_s32(t.val[0], t.val[1]);                          \
+        t.val[3] = vuzp2q_s32(t.val[0], t.val[1]);                          \
+        t.val[0] = vmulq_n_s32(t.val[2], GOODS_MONT_PM_PRIME);              \
+        t.val[1] = (int32x4_t)vmull_n_s32(vget_low_s32(t.val[0]), GOODS_Q); \
+        t.val[2] = (int32x4_t)vmull_high_n_s32(t.val[0], GOODS_Q);          \
+        t.val[0] = vuzp2q_s32(t.val[1], t.val[2]);                          \
+        z = vsubq_s32(t.val[3], t.val[0]);                                  \
+    } while (0)
+
+// idea from ~/crypto_kem/kyber768/aarch64/neon_ntt.c#L128
+#define mont_mul_neon(z, x, y, t)                                           \
+    do {                                                                    \
+        t.val[0] = (int32x4_t)vmull_s32(vget_low_s32(x), vget_low_s32(y));  \
+        t.val[1] = (int32x4_t)vmull_high_s32(x, y);                         \
+        t.val[2] = vuzp1q_s32(t.val[0], t.val[1]);                          \
+        t.val[3] = vuzp2q_s32(t.val[0], t.val[1]);                          \
+        t.val[0] = vmulq_n_s32(t.val[2], GOODS_MONT_PM_PRIME);              \
+        t.val[1] = (int32x4_t)vmull_n_s32(vget_low_s32(t.val[0]), GOODS_Q); \
+        t.val[2] = (int32x4_t)vmull_high_n_s32(t.val[0], GOODS_Q);          \
+        t.val[0] = vuzp2q_s32(t.val[1], t.val[2]);                          \
+        z = vsubq_s32(t.val[3], t.val[0]);                                  \
+    } while (0)
+
 int32_t mont_mul(int32_t x, int32_t y) {
     int64_t z = (int64_t)x * y;
-    int64_t l = ((int64_t)(z & UINT32_MAX) * GOODS_MONT_M_PRIME) & UINT32_MAX;
+    int64_t l = ((z & UINT32_MAX) * GOODS_MONT_MM_PRIME) & UINT32_MAX;
     return (z + l * GOODS_Q) >> GOODS_MONT_R_POW;
 }
 
 int32_t centered_goods_q(int32_t x) {
-    int32_t y = GOODS_Q / 2 - x;
+    int32_t y = GOODS_Q_HALF - x;
     uint32_t mask = -((uint32_t)y >> 31);
     return x - (mask & GOODS_Q);
 }
 
 int32_t mont_mul_sum_x3(int32_t x1, int32_t y1, int32_t x2, int32_t y2,
                         int32_t x3, int32_t y3) {
-    int64_t z = (int64_t)x1 * y1;
-    z += (int64_t)x2 * y2;
-    z += (int64_t)x3 * y3;
-    int64_t l = ((int64_t)(z & UINT32_MAX) * GOODS_MONT_M_PRIME) & UINT32_MAX;
+    int64_t z = (int64_t)x1 * y1 + (int64_t)x2 * y2 + (int64_t)x3 * y3;
+    int64_t l = ((z & UINT32_MAX) * GOODS_MONT_MM_PRIME) & UINT32_MAX;
     return (z + l * GOODS_Q) >> GOODS_MONT_R_POW;
 }
 
-// TODO: optimize bufferfly and mont_mul with neon
+#define layer_permute(z, x2, x1, a, b, c, d)                     \
+    do {                                                         \
+        x2[i].val[0] = v##z##1q_s32(x1[i].val[a], x1[i].val[b]); \
+        x2[i].val[1] = v##z##2q_s32(x1[i].val[a], x1[i].val[b]); \
+        x2[i].val[2] = v##z##1q_s32(x1[i].val[c], x1[i].val[d]); \
+        x2[i].val[3] = v##z##2q_s32(x1[i].val[c], x1[i].val[d]); \
+    } while (0)
+
+#define cooley_tukey_x4(x, omega)                                  \
+    do {                                                           \
+        mont_mul_neon_n(t2.val[0], x[i + size].val[0], omega, t1); \
+        mont_mul_neon_n(t2.val[1], x[i + size].val[1], omega, t1); \
+        mont_mul_neon_n(t2.val[2], x[i + size].val[2], omega, t1); \
+        mont_mul_neon_n(t2.val[3], x[i + size].val[3], omega, t1); \
+        x[i + size].val[0] = vsubq_s32(x[i].val[0], t2.val[0]);    \
+        x[i + size].val[1] = vsubq_s32(x[i].val[1], t2.val[1]);    \
+        x[i + size].val[2] = vsubq_s32(x[i].val[2], t2.val[2]);    \
+        x[i + size].val[3] = vsubq_s32(x[i].val[3], t2.val[3]);    \
+        x[i].val[0] = vaddq_s32(x[i].val[0], t2.val[0]);           \
+        x[i].val[1] = vaddq_s32(x[i].val[1], t2.val[1]);           \
+        x[i].val[2] = vaddq_s32(x[i].val[2], t2.val[2]);           \
+        x[i].val[3] = vaddq_s32(x[i].val[3], t2.val[3]);           \
+    } while (0)
+
+#define cooley_tukey_x2(mul, x, omega1, omega2)          \
+    do {                                                 \
+        mul(t2.val[0], x[i].val[1], omega1, t1);         \
+        mul(t2.val[1], x[i].val[3], omega2, t1);         \
+        x[i].val[1] = vsubq_s32(x[i].val[0], t2.val[0]); \
+        x[i].val[3] = vsubq_s32(x[i].val[2], t2.val[1]); \
+        x[i].val[0] = vaddq_s32(x[i].val[0], t2.val[0]); \
+        x[i].val[2] = vaddq_s32(x[i].val[2], t2.val[1]); \
+    } while (0)
+
 void ntt_512_x3(int32_t x[3][GOODS_N]) {
-    for (int size = GOODS_N_HALF; size > 0; size >>= 1) {
-        int chunks = GOODS_N_HALF / size;
+    int32x4x4_t x1[3][32], x2[3][32];
+    int32x4x4_t t1, t2;
+
+    // load
+    for (int i = 0; i < 32; ++i) {
+        x1[0][i] = vld4q_s32(&x[0][i * 16]);
+        x1[1][i] = vld4q_s32(&x[1][i * 16]);
+        x1[2][i] = vld4q_s32(&x[2][i * 16]);
+    }
+
+    // layer 2-5
+    for (int size = 8; size > 0; size >>= 1) {
+        int chunks = 16 / size;
 
         for (int offset = 0; offset < chunks; ++offset) {
+            int32_t omega = goods_omegas[offset];
+
             int begin = 2 * size * offset;
-
             for (int i = begin; i < begin + size; ++i) {
-                int32_t omega = goods_omegas[offset], ox;
-
-                ox = mont_mul(x[0][i + size], omega);
-                x[0][i] += ox;
-                x[0][i + size] = x[0][i] - (ox << 1);
-
-                ox = mont_mul(x[1][i + size], omega);
-                x[1][i] += ox;
-                x[1][i + size] = x[1][i] - (ox << 1);
-
-                ox = mont_mul(x[2][i + size], omega);
-                x[2][i] += ox;
-                x[2][i + size] = x[2][i] - (ox << 1);
+                cooley_tukey_x4(x1[0], omega);
+                cooley_tukey_x4(x1[1], omega);
+                cooley_tukey_x4(x1[2], omega);
             }
         }
+    }
+
+    // layer 6
+    for (int i = 0; i < 32; ++i) {
+        layer_permute(zip, x2[0], x1[0], 0, 1, 2, 3);
+        layer_permute(zip, x2[1], x1[1], 0, 1, 2, 3);
+        layer_permute(zip, x2[2], x1[2], 0, 1, 2, 3);
+
+        int32_t omega = goods_omegas[i];
+        cooley_tukey_x2(mont_mul_neon_n, x2[0], omega, omega);
+        cooley_tukey_x2(mont_mul_neon_n, x2[1], omega, omega);
+        cooley_tukey_x2(mont_mul_neon_n, x2[2], omega, omega);
+    }
+
+    // layer 7
+    for (int i = 0; i < 32; ++i) {
+        layer_permute(zip, x1[0], x2[0], 0, 2, 1, 3);
+        layer_permute(zip, x1[1], x2[1], 0, 2, 1, 3);
+        layer_permute(zip, x1[2], x2[2], 0, 2, 1, 3);
+
+        int32_t omega1 = goods_omegas[2 * i];
+        int32_t omega2 = goods_omegas[2 * i + 1];
+        cooley_tukey_x2(mont_mul_neon_n, x1[0], omega1, omega2);
+        cooley_tukey_x2(mont_mul_neon_n, x1[1], omega1, omega2);
+        cooley_tukey_x2(mont_mul_neon_n, x1[2], omega1, omega2);
+    }
+
+    // layer 8
+    for (int i = 0; i < 32; ++i) {
+        layer_permute(uzp, x2[0], x1[0], 0, 1, 2, 3);
+        layer_permute(uzp, x2[1], x1[1], 0, 1, 2, 3);
+        layer_permute(uzp, x2[2], x1[2], 0, 1, 2, 3);
+
+        int32x2x2_t omega12 = vld2_dup_s32(&goods_omegas[4 * i]);
+        int32x2x2_t omega34 = vld2_dup_s32(&goods_omegas[4 * i + 2]);
+        int32x4_t omega1122 = vcombine_s32(omega12.val[0], omega12.val[1]);
+        int32x4_t omega3344 = vcombine_s32(omega34.val[0], omega34.val[1]);
+        cooley_tukey_x2(mont_mul_neon, x2[0], omega1122, omega3344);
+        cooley_tukey_x2(mont_mul_neon, x2[1], omega1122, omega3344);
+        cooley_tukey_x2(mont_mul_neon, x2[2], omega1122, omega3344);
+    }
+
+    // layer 9
+    for (int i = 0; i < 32; ++i) {
+        layer_permute(uzp, x1[0], x2[0], 0, 2, 1, 3);
+        layer_permute(uzp, x1[1], x2[1], 0, 2, 1, 3);
+        layer_permute(uzp, x1[2], x2[2], 0, 2, 1, 3);
+
+        int32x4_t omega1234 = vld1q_s32(&goods_omegas[8 * i]);
+        int32x4_t omega5678 = vld1q_s32(&goods_omegas[8 * i + 4]);
+        int32x4_t omega1357 = vuzp1q_s32(omega1234, omega5678);
+        int32x4_t omega2368 = vuzp2q_s32(omega1234, omega5678);
+        cooley_tukey_x2(mont_mul_neon, x1[0], omega1357, omega2368);
+        cooley_tukey_x2(mont_mul_neon, x1[1], omega1357, omega2368);
+        cooley_tukey_x2(mont_mul_neon, x1[2], omega1357, omega2368);
+    }
+
+    // store
+    for (int i = 0; i < 32; ++i) {
+        vst4q_s32(&x[0][i * 16], x1[0][i]);
+        vst4q_s32(&x[1][i * 16], x1[1][i]);
+        vst4q_s32(&x[2][i * 16], x1[2][i]);
     }
 }
 
@@ -162,40 +290,33 @@ void intt_512_x3(int32_t x[3][GOODS_N]) {
         int chunks = GOODS_N_HALF / size;
 
         for (int offset = 0; offset < chunks; ++offset) {
+            int32_t inv_omega = goods_inv_omegas[offset], ox;
+
             int begin = 2 * size * offset;
-
             for (int i = begin; i < begin + size; ++i) {
-                int32_t inv_omega = goods_inv_omegas[offset];
-
+                ox = x[0][i];
                 x[0][i] += x[0][i + size];
-                x[0][i + size] =
-                    mont_mul(x[0][i] - (x[0][i + size] << 1), inv_omega);
+                x[0][i + size] = mont_mul(ox - x[0][i + size], inv_omega);
 
+                ox = x[1][i];
                 x[1][i] += x[1][i + size];
-                x[1][i + size] =
-                    mont_mul(x[1][i] - (x[1][i + size] << 1), inv_omega);
+                x[1][i + size] = mont_mul(ox - x[1][i + size], inv_omega);
 
+                ox = x[2][i];
                 x[2][i] += x[2][i + size];
-                x[2][i + size] =
-                    mont_mul(x[2][i] - (x[2][i + size] << 1), inv_omega);
+                x[2][i + size] = mont_mul(ox - x[2][i + size], inv_omega);
             }
         }
     }
 }
 
-// TODO: unroll permutation with first round
-// TODO: unroll unpermutation
 // TODO: optimize mont_mul with neon
 void mul_small_goods(Fq *h, const Fq *f, const small *g) {
-    // permutation
-    int32_t pf[3][GOODS_N], pg[3][GOODS_N];
-    for (int i = 0; i < 3; ++i) {
-        for (int j = 0; j < GOODS_N; ++j) {
-            int k = (1024 * i + 513 * j) % GOODS_P;
-            pf[i][j] = k < NTRU_LPRIME_P ? f[k] : 0;
-            pg[i][j] = k < NTRU_LPRIME_P ? g[k] : 0;
-        }
-    }
+    int32_t pf[3][GOODS_N] = {0}, pg[3][GOODS_N] = {0};
+
+    // layer_permute to layer 1
+    goods_permute_to_layer1(pf, f);
+    goods_permute_to_layer1(pg, g);
 
     // ntt
     ntt_512_x3(pf);
@@ -218,12 +339,8 @@ void mul_small_goods(Fq *h, const Fq *f, const small *g) {
     intt_512_x3(pf);
 
     // unpermutation
-    int32_t hh[GOODS_P] = {0};
-    for (int i = 0; i < 3; ++i) {
-        for (int j = 0; j < GOODS_N; ++j) {
-            hh[(1024 * i + 513 * j) % GOODS_P] = pf[i][j];
-        }
-    }
+    int32_t hh[GOODS_P];
+    goods_unpermute(hh, pf);
 
     // mod poly
     for (int i = GOODS_P - 1; i >= NTRU_LPRIME_P; --i) {
