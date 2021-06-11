@@ -23,7 +23,7 @@
 // ((1 << 32) % 6984193) - 6984193
 #define GOODS_MONT_R_MOD_Q -311399
 // (pow(512, -1, 6984193) * 1 << 64) % 6984193
-#define GOODS_MONT_R_SQUARE_INV_N_MOD_Q 2770689
+#define GOODS_MONT_R_SQR_INV_N_MOD_Q 2770689
 
 // NOTE: python3 script to generate goods_omegas
 // q, r, g  = 6984193, -311399, 3991943
@@ -140,7 +140,15 @@ int32_t goods_inv_omegas[GOODS_N_HALF] = {
         z = vsubq_s32(t.val[3], t.val[0]);                                  \
     } while (0)
 
-#define mont_mul_neon_x3(z, x1, y1, x2, y2, x3, y3, t1, t2)                   \
+#define mont_mul_neon_n_x4(z, x, y, t)             \
+    do {                                           \
+        mont_mul_neon_n(z.val[0], x.val[0], y, t); \
+        mont_mul_neon_n(z.val[1], x.val[1], y, t); \
+        mont_mul_neon_n(z.val[2], x.val[2], y, t); \
+        mont_mul_neon_n(z.val[3], x.val[3], y, t); \
+    } while (0)
+
+#define mont_mul_sum_3_neon(z, x1, y1, x2, y2, x3, y3, t1, t2)                \
     do {                                                                      \
         t2.val[0] = vmull_s32(vget_low_s32(x1), vget_low_s32(y1));            \
         t2.val[1] = vmull_high_s32(x1, y1);                                   \
@@ -158,18 +166,6 @@ int32_t goods_inv_omegas[GOODS_N_HALF] = {
         t1.val[0] = vuzp2q_s32(t1.val[1], t1.val[2]);                         \
         z = vsubq_s32(t1.val[3], t1.val[0]);                                  \
     } while (0)
-
-int32_t mont_mul(int32_t x, int32_t y) {
-    int64_t z = (int64_t)x * y;
-    int64_t l = ((z & UINT32_MAX) * GOODS_MONT_MM_PRIME) & UINT32_MAX;
-    return (z + l * GOODS_Q) >> GOODS_MONT_R_POW;
-}
-
-int32_t centered_goods_q(int32_t x) {
-    int32_t y = GOODS_Q_HALF - x;
-    uint32_t mask = -((uint32_t)y >> 31);
-    return x - (mask & GOODS_Q);
-}
 
 #define layer_permute1(z, x2, x1, a, b, c, d)                    \
     do {                                                         \
@@ -253,6 +249,40 @@ int32_t centered_goods_q(int32_t x) {
         mul(x[i].val[3], vsubq_s32(t1.val[2], x[i].val[3]), omega2, t2); \
     } while (0)
 
+#define schoolbook_3x3(x, y, j, t1, t2, t3)                      \
+    do {                                                         \
+        mont_mul_sum_3_neon(t1.val[0],                      /**/ \
+                            x[0][i].val[j], y[0][i].val[j], /**/ \
+                            x[1][i].val[j], y[2][i].val[j], /**/ \
+                            x[2][i].val[j], y[1][i].val[j], /**/ \
+                            t2, t3);                             \
+        mont_mul_sum_3_neon(t1.val[1],                      /**/ \
+                            x[0][i].val[j], y[1][i].val[j], /**/ \
+                            x[1][i].val[j], y[0][i].val[j], /**/ \
+                            x[2][i].val[j], y[2][i].val[j], /**/ \
+                            t2, t3);                             \
+        mont_mul_sum_3_neon(t1.val[2],                      /**/ \
+                            x[0][i].val[j], y[2][i].val[j], /**/ \
+                            x[2][i].val[j], y[0][i].val[j], /**/ \
+                            x[1][i].val[j], y[1][i].val[j], /**/ \
+                            t2, t3);                             \
+        x[0][i].val[j] = t1.val[0];                              \
+        x[1][i].val[j] = t1.val[1];                              \
+        x[2][i].val[j] = t1.val[2];                              \
+    } while (0)
+
+int32_t mont_mul(int32_t x, int32_t y) {
+    int64_t z = (int64_t)x * y;
+    int64_t l = ((z & UINT32_MAX) * GOODS_MONT_MM_PRIME) & UINT32_MAX;
+    return (z + l * GOODS_Q) >> GOODS_MONT_R_POW;
+}
+
+int32_t centered_goods_q(int32_t x) {
+    int32_t y = GOODS_Q_HALF - x;
+    uint32_t mask = -((uint32_t)y >> 31);
+    return x - (mask & GOODS_Q);
+}
+
 void goods_ntt_512_x3(int32x4x4_t x[3][32]) {
     int32x4x4_t tx[3][32];
     int32x4x4_t t1, t2;
@@ -275,6 +305,10 @@ void goods_ntt_512_x3(int32x4x4_t x[3][32]) {
 
     // layer 6
     for (int i = 0; i < 32; ++i) {
+        // 1  5  9   13  ->  1   2   5   6
+        // 2  6  10  14  ->  9   10  13  14
+        // 3  7  11  15  ->  3   4   7   8
+        // 4  8  12  16  ->  11  12  15  16
         layer_permute1(zip, tx[0], x[0], 0, 1, 2, 3);
         layer_permute1(zip, tx[1], x[1], 0, 1, 2, 3);
         layer_permute1(zip, tx[2], x[2], 0, 1, 2, 3);
@@ -287,6 +321,10 @@ void goods_ntt_512_x3(int32x4x4_t x[3][32]) {
 
     // layer 7
     for (int i = 0; i < 32; ++i) {
+        // 1   2   5   6   ->  1   3   2   4
+        // 9   10  13  14  ->  5   7   6   8
+        // 3   4   7   8   ->  9   11  10  12
+        // 11  12  15  16  ->  13  15  14  16
         layer_permute1(zip, x[0], tx[0], 0, 2, 1, 3);
         layer_permute1(zip, x[1], tx[1], 0, 2, 1, 3);
         layer_permute1(zip, x[2], tx[2], 0, 2, 1, 3);
@@ -300,6 +338,10 @@ void goods_ntt_512_x3(int32x4x4_t x[3][32]) {
 
     // layer 8
     for (int i = 0; i < 32; ++i) {
+        // 1   3   2   4   ->  1   2   5   6
+        // 5   7   6   8   ->  3   4   7   8
+        // 9   11  10  12  ->  9   10  13  14
+        // 13  15  14  16  ->  11  12  15  16
         layer_permute1(uzp, tx[0], x[0], 0, 1, 2, 3);
         layer_permute1(uzp, tx[1], x[1], 0, 1, 2, 3);
         layer_permute1(uzp, tx[2], x[2], 0, 1, 2, 3);
@@ -315,6 +357,10 @@ void goods_ntt_512_x3(int32x4x4_t x[3][32]) {
 
     // layer 9
     for (int i = 0; i < 32; ++i) {
+        // 1   2   5   6   ->  1  5  9   13
+        // 3   4   7   8   ->  2  6  10  14
+        // 9   10  13  14  ->  3  7  11  15
+        // 11  12  15  16  ->  4  8  12  16
         layer_permute1(uzp, x[0], tx[0], 0, 2, 1, 3);
         layer_permute1(uzp, x[1], tx[1], 0, 2, 1, 3);
         layer_permute1(uzp, x[2], tx[2], 0, 2, 1, 3);
@@ -333,26 +379,10 @@ void goods_schoolbook(int32x4x4_t x[3][32], int32x4x4_t y[3][32]) {
     int32x4x4_t t1, t2;
     int64x2x2_t t3;
     for (int i = 0; i < 32; ++i) {
-        for (int j = 0; j < 4; ++j) {
-            mont_mul_neon_x3(t1.val[0],                       //
-                             x[0][i].val[j], y[0][i].val[j],  //
-                             x[1][i].val[j], y[2][i].val[j],  //
-                             x[2][i].val[j], y[1][i].val[j],  //
-                             t2, t3);
-            mont_mul_neon_x3(t1.val[1],                       //
-                             x[0][i].val[j], y[1][i].val[j],  //
-                             x[1][i].val[j], y[0][i].val[j],  //
-                             x[2][i].val[j], y[2][i].val[j],  //
-                             t2, t3);
-            mont_mul_neon_x3(t1.val[2],                       //
-                             x[0][i].val[j], y[2][i].val[j],  //
-                             x[2][i].val[j], y[0][i].val[j],  //
-                             x[1][i].val[j], y[1][i].val[j],  //
-                             t2, t3);
-            x[0][i].val[j] = t1.val[0];
-            x[1][i].val[j] = t1.val[1];
-            x[2][i].val[j] = t1.val[2];
-        }
+        schoolbook_3x3(x, y, 0, t1, t2, t3);
+        schoolbook_3x3(x, y, 1, t1, t2, t3);
+        schoolbook_3x3(x, y, 2, t1, t2, t3);
+        schoolbook_3x3(x, y, 3, t1, t2, t3);
     }
 }
 
@@ -369,14 +399,18 @@ void goods_intt_512_x3(int32x4x4_t x[3][32]) {
         gentleman_sande_x2(mont_mul_neon, x[0], omega1357, omega2368, t1, t2);
         gentleman_sande_x2(mont_mul_neon, x[1], omega1357, omega2368, t1, t2);
         gentleman_sande_x2(mont_mul_neon, x[2], omega1357, omega2368, t1, t2);
+
+        // 1  5  9   13  ->  1   2   5   6
+        // 2  6  10  14  ->  3   4   7   8
+        // 3  7  11  15  ->  9   10  13  14
+        // 4  8  12  16  ->  11  12  15  16
+        layer_permute2(zip, tx[0], x[0], 0, 1, 2, 3);
+        layer_permute2(zip, tx[1], x[1], 0, 1, 2, 3);
+        layer_permute2(zip, tx[2], x[2], 0, 1, 2, 3);
     }
 
     // layer 2
     for (int i = 0; i < 32; ++i) {
-        layer_permute2(zip, tx[0], x[0], 0, 1, 2, 3);
-        layer_permute2(zip, tx[1], x[1], 0, 1, 2, 3);
-        layer_permute2(zip, tx[2], x[2], 0, 1, 2, 3);
-
         int32x2x2_t omega12 = vld2_dup_s32(&goods_inv_omegas[4 * i]);
         int32x2x2_t omega34 = vld2_dup_s32(&goods_inv_omegas[4 * i + 2]);
         int32x4_t omega1122 = vcombine_s32(omega12.val[0], omega12.val[1]);
@@ -384,32 +418,44 @@ void goods_intt_512_x3(int32x4x4_t x[3][32]) {
         gentleman_sande_x2(mont_mul_neon, tx[0], omega1122, omega3344, t1, t2);
         gentleman_sande_x2(mont_mul_neon, tx[1], omega1122, omega3344, t1, t2);
         gentleman_sande_x2(mont_mul_neon, tx[2], omega1122, omega3344, t1, t2);
+
+        // 1   2   5   6   ->  1   3   2   4
+        // 3   4   7   8   ->  5   7   6   8
+        // 9   10  13  14  ->  9   11  10  12
+        // 11  12  15  16  ->  13  15  14  16
+        layer_permute1(zip, x[0], tx[0], 0, 1, 2, 3);
+        layer_permute1(zip, x[1], tx[1], 0, 1, 2, 3);
+        layer_permute1(zip, x[2], tx[2], 0, 1, 2, 3);
     }
 
     // layer 3
     for (int i = 0; i < 32; ++i) {
-        layer_permute1(zip, x[0], tx[0], 0, 1, 2, 3);
-        layer_permute1(zip, x[1], tx[1], 0, 1, 2, 3);
-        layer_permute1(zip, x[2], tx[2], 0, 1, 2, 3);
-
         int32_t omega1 = goods_inv_omegas[2 * i];
         int32_t omega2 = goods_inv_omegas[2 * i + 1];
         gentleman_sande_x2(mont_mul_neon_n, x[0], omega1, omega2, t1, t2);
         gentleman_sande_x2(mont_mul_neon_n, x[1], omega1, omega2, t1, t2);
         gentleman_sande_x2(mont_mul_neon_n, x[2], omega1, omega2, t1, t2);
+
+        // 1   3   2   4   ->  1   2   5   6
+        // 5   7   6   8   ->  9   10  13  14
+        // 9   11  10  12  ->  3   4   7   8
+        // 13  15  14  16  ->  11  12  15  16
+        layer_permute2(uzp, tx[0], x[0], 0, 1, 2, 3);
+        layer_permute2(uzp, tx[1], x[1], 0, 1, 2, 3);
+        layer_permute2(uzp, tx[2], x[2], 0, 1, 2, 3);
     }
 
     // layer 4
     for (int i = 0; i < 32; ++i) {
-        layer_permute2(uzp, tx[0], x[0], 0, 1, 2, 3);
-        layer_permute2(uzp, tx[1], x[1], 0, 1, 2, 3);
-        layer_permute2(uzp, tx[2], x[2], 0, 1, 2, 3);
-
         int32_t omega = goods_inv_omegas[i];
         gentleman_sande_x2(mont_mul_neon_n, tx[0], omega, omega, t1, t2);
         gentleman_sande_x2(mont_mul_neon_n, tx[1], omega, omega, t1, t2);
         gentleman_sande_x2(mont_mul_neon_n, tx[2], omega, omega, t1, t2);
 
+        // 1   2   5   6   ->  1  5  9   13
+        // 9   10  13  14  ->  2  6  10  14
+        // 3   4   7   8   ->  3  7  11  15
+        // 11  12  15  16  ->  4  8  12  16
         layer_permute1(uzp, x[0], tx[0], 0, 1, 2, 3);
         layer_permute1(uzp, x[1], tx[1], 0, 1, 2, 3);
         layer_permute1(uzp, x[2], tx[2], 0, 1, 2, 3);
@@ -441,14 +487,9 @@ void goods_intt_512_x3(int32x4x4_t x[3][32]) {
 
     // divide 512
     for (int i = 0; i < 32; ++i) {
-        for (int j = 0; j < 4; ++j) {
-            mont_mul_neon_n(x[0][i].val[j], x[0][i].val[j],
-                            GOODS_MONT_R_SQUARE_INV_N_MOD_Q, t1);
-            mont_mul_neon_n(x[1][i].val[j], x[1][i].val[j],
-                            GOODS_MONT_R_SQUARE_INV_N_MOD_Q, t1);
-            mont_mul_neon_n(x[2][i].val[j], x[2][i].val[j],
-                            GOODS_MONT_R_SQUARE_INV_N_MOD_Q, t1);
-        }
+        mont_mul_neon_n_x4(x[0][i], x[0][i], GOODS_MONT_R_SQR_INV_N_MOD_Q, t1);
+        mont_mul_neon_n_x4(x[1][i], x[1][i], GOODS_MONT_R_SQR_INV_N_MOD_Q, t1);
+        mont_mul_neon_n_x4(x[2][i], x[2][i], GOODS_MONT_R_SQR_INV_N_MOD_Q, t1);
     }
 }
 
