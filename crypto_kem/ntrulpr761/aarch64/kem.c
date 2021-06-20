@@ -2,6 +2,7 @@
 #include "crypto_sort_uint32.h"
 #include "crypto_stream_aes256ctr.h"
 #include "params.h"
+#include "poly_goods.h"
 #include "randombytes.h"
 #include "sha2.h"
 
@@ -61,12 +62,7 @@ static Fq Right(int8 T) { return Fq_freeze(tau3 * (int32)T - tau2); }
 /* ----- polynomials mod q */
 
 /* h = h*g in the ring Rq */
-static void Rq_mult_small(Fq *h, const small *g) {
-    crypto_encode_pxint16((unsigned char *)h, h);
-    crypto_core_mult((unsigned char *)h, (const unsigned char *)h,
-                     (const unsigned char *)g);
-    crypto_decode_pxint16(h, (const unsigned char *)h);
-}
+static void Rq_mult_small(Fq *h, const small *g) { mul_small_goods(h, h, g); }
 
 /* ----- sorting to generate short polynomial */
 
@@ -161,17 +157,13 @@ static void Hide(unsigned char *c, unsigned char *r_enc, const Inputs r,
         Short_fromlist(b, L);
     }
     {
-        Fq bG[p];
+        Fq bG[p], bA[p];
         Generator(bG, pk);
-        Rq_mult_small(bG, b);
+        Rounded_decode(bA, pk + Seeds_bytes);
+        mul_small_goods_x2(bG, bA, bG, bA, b);
         Round_and_encode(c, bG);
         c += Rounded_bytes;
-    }
-    {
-        Fq bA[p];
         int8 T[I];
-        Rounded_decode(bA, pk + Seeds_bytes);
-        Rq_mult_small(bA, b);
         for (i = 0; i < I; ++i) {
             T[i] = Top(Fq_freeze(bA[i] + r[i] * q12));
         }
